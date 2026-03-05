@@ -414,7 +414,7 @@ async def cmd_start(message: Message, state: FSMContext):
     args  = message.text.split()
     param = args[1] if len(args) > 1 else ""
 
-    if param == "vip" or is_old_student(username):
+    if is_old_student(username):
         discount = 13; discount_type = "old_student"
     elif param.startswith("ref_"):
         ref_owner = get_user_by_ref(param)
