@@ -12,6 +12,7 @@ import os
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_USERNAME = "serotonin_high"
+ADMINS = {"serotonin_high", "maxtroid"}
 PAYMENT_PHONE = "89999998266"
 PAYMENT_NAME = "Елена (Т-Банк)"
 
@@ -379,7 +380,7 @@ async def back_menu(callback: CallbackQuery):
 
 @dp.message(Command("addold"))
 async def add_old_students(message: Message):
-    if message.from_user.username != ADMIN_USERNAME:
+    if message.from_user.username not in ADMINS:
         return
     lines     = message.text.replace("/addold", "").strip().split("\n")
     usernames = [l.strip().lstrip("@").lower() for l in lines if l.strip()]
