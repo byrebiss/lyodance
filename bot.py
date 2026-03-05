@@ -388,7 +388,7 @@ async def receive_screenshot(message: Message, state: FSMContext):
         f"💰 {data['final']:,} ₽" + (f" (скидка {data['discount']}%)" if data['discount'] else "")
     )
     try:
-        await bot.send_photo(chat_id="@maxtroid", photo=message.photo[-1].file_id,
+        await bot.send_photo(chat_id=429779513, photo=message.photo[-1].file_id,
                              caption=caption, reply_markup=kb)
     except Exception as e:
         logging.error(f"Ошибка отправки: {e}")
