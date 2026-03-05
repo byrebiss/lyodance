@@ -96,6 +96,13 @@ def init_db():
             status       TEXT DEFAULT 'pending'
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS ref_used (
+            user_id  INTEGER,
+            ref_code TEXT,
+            PRIMARY KEY (user_id, ref_code)
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -142,6 +149,21 @@ def get_user_by_ref(ref_code):
     row = c.fetchone()
     conn.close()
     return row
+
+def has_used_ref(user_id, ref_code):
+    conn = sqlite3.connect("dance.db")
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM ref_used WHERE user_id=? AND ref_code=?", (user_id, ref_code))
+    row = c.fetchone()
+    conn.close()
+    return row is not None
+
+def mark_ref_used(user_id, ref_code):
+    conn = sqlite3.connect("dance.db")
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO ref_used (user_id, ref_code) VALUES (?,?)", (user_id, ref_code))
+    conn.commit()
+    conn.close()
 
 def add_pending_payment(user_id, tariff, group_id, amount, discount, final_amount):
     conn = sqlite3.connect("dance.db")
@@ -223,6 +245,7 @@ class Form(StatesGroup):
     choosing_group            = State()
     broadcast_text            = State()
     broadcast_group_text      = State()
+    reset_discount_username   = State()
 
 # ── Клавиатуры ────────────────────────────────────────────────────────────────
 
@@ -244,6 +267,7 @@ def tariff_keyboard(discount):
         final = int(val["price"] * (1 - discount / 100))
         label = f"{val['name']} — {final:,} ₽" + (f" (скидка {discount}%)" if discount else "")
         buttons.append([InlineKeyboardButton(text=label, callback_data=f"tariff_{key}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def group_keyboard(tariff_key):
@@ -257,6 +281,7 @@ def group_keyboard(tariff_key):
             extra = " + встреча + съёмка"
         label = f"Группа {gid}: {first} – {last}{extra}"
         buttons.append([InlineKeyboardButton(text=label, callback_data=f"group_{gid}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="enroll")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def admin_keyboard():
@@ -266,6 +291,7 @@ def admin_keyboard():
         [InlineKeyboardButton(text="📢 Рассылка всем",       callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="📢 Рассылка по группе",  callback_data="admin_broadcast_group")],
         [InlineKeyboardButton(text="➕ Добавить старых",      callback_data="admin_addold")],
+        [InlineKeyboardButton(text="🗑 Сбросить скидку",     callback_data="admin_resetdiscount")],
         [InlineKeyboardButton(text="◀️ Назад",               callback_data="back_menu")],
     ])
 
@@ -310,8 +336,9 @@ async def cmd_start(message: Message, state: FSMContext):
         discount = 13; discount_type = "old_student"
     elif param.startswith("ref_"):
         ref_owner = get_user_by_ref(param)
-        if ref_owner and ref_owner[0] != user_id:
+        if ref_owner and ref_owner[0] != user_id and not has_used_ref(user_id, param):
             discount = 5; discount_type = "referral"; referred_by = ref_owner[0]
+            mark_ref_used(user_id, param)
 
     upsert_user(user_id, username, full_name, discount, discount_type, f"ref_{user_id}", referred_by)
 
@@ -365,7 +392,8 @@ async def choose_group(callback: CallbackQuery, state: FSMContext):
         f"Отлично! Твоя группа:\n\n{schedule_text}\n\n"
         f"💰 К оплате: <b>{data['final']:,} ₽</b>" + (f" (скидка {data['discount']}%)" if data['discount'] else "") +
         f"\n\n📱 Переведи на номер:\n<code>{PAYMENT_PHONE}</code>\n({PAYMENT_NAME})\n\n"
-        f"После оплаты отправь сюда <b>скриншот перевода</b> 📸"
+        f"После оплаты отправь сюда <b>скриншот перевода</b> 📸",
+        reply_markup=back_keyboard()
     )
     await state.set_state(Form.waiting_screenshot)
 
@@ -380,12 +408,15 @@ async def receive_screenshot(message: Message, state: FSMContext):
         InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_{pid}"),
         InlineKeyboardButton(text="❌ Отклонить",   callback_data=f"reject_{pid}"),
     ]])
+    price_line = f"💰 {data['original']:,} ₽"
+    if data['discount']:
+        price_line += f"\n💸 {data['final']:,} ₽ (скидка {data['discount']}%)"
     caption = (
         f"💳 <b>Новая оплата #{pid}</b>\n\n"
         f"👤 {user.full_name} (@{user.username or 'нет'})\n"
         f"📦 {data['tariff_name']}\n"
         f"👥 Группа {data['group_id']}\n"
-        f"💰 {data['final']:,} ₽" + (f" (скидка {data['discount']}%)" if data['discount'] else "")
+        f"{price_line}"
     )
     try:
         await bot.send_photo(chat_id=429779513, photo=message.photo[-1].file_id,
@@ -477,7 +508,8 @@ async def repost(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "📸 <b>Скидка 5% за репост</b>\n\n"
         "1. Сделай репост любого поста из канала Лё к себе в сторис или на стену\n"
-        "2. Сделай скриншот и отправь сюда\n\nПолина проверит и скидка активируется ✅"
+        "2. Сделай скриншот и отправь сюда\n\nПолина проверит и скидка активируется ✅",
+        reply_markup=back_keyboard()
     )
     await state.set_state(Form.waiting_repost_screenshot)
 
@@ -584,7 +616,7 @@ async def admin_users(callback: CallbackQuery):
 async def admin_broadcast(callback: CallbackQuery, state: FSMContext):
     if (callback.from_user.username or "") not in ADMINS:
         return
-    await callback.message.edit_text("📢 Напиши сообщение для рассылки всем участницам:")
+    await callback.message.edit_text("📢 Напиши сообщение для рассылки всем участницам:", reply_markup=back_keyboard())
     await state.set_state(Form.broadcast_text)
 
 @dp.message(Form.broadcast_text)
@@ -607,8 +639,9 @@ async def admin_broadcast_group(callback: CallbackQuery, state: FSMContext):
     if (callback.from_user.username or "") not in ADMINS:
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Группа {g}", callback_data=f"bcastgroup_{g}")]
-        for g in SCHEDULE.keys()
+        *[[InlineKeyboardButton(text=f"Группа {g}", callback_data=f"bcastgroup_{g}")]
+          for g in SCHEDULE.keys()],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")],
     ])
     await callback.message.edit_text("Выбери группу для рассылки:", reply_markup=kb)
 
@@ -616,7 +649,7 @@ async def admin_broadcast_group(callback: CallbackQuery, state: FSMContext):
 async def pick_broadcast_group(callback: CallbackQuery, state: FSMContext):
     gid = int(callback.data.replace("bcastgroup_", ""))
     await state.update_data(broadcast_group=gid)
-    await callback.message.edit_text(f"📢 Напиши сообщение для Группы {gid}:")
+    await callback.message.edit_text(f"📢 Напиши сообщение для Группы {gid}:", reply_markup=back_keyboard())
     await state.set_state(Form.broadcast_group_text)
 
 @dp.message(Form.broadcast_group_text)
@@ -641,8 +674,35 @@ async def admin_addold_prompt(callback: CallbackQuery):
     if (callback.from_user.username or "") not in ADMINS:
         return
     await callback.message.edit_text(
-        "Напиши список username через /addold:\n\n<code>/addold\n@username1\n@username2</code>"
+        "Напиши список username через /addold:\n\n<code>/addold\n@username1\n@username2</code>",
+        reply_markup=back_keyboard()
     )
+
+@dp.callback_query(F.data == "admin_resetdiscount")
+async def admin_resetdiscount_prompt(callback: CallbackQuery, state: FSMContext):
+    if (callback.from_user.username or "") not in ADMINS:
+        return
+    await callback.message.edit_text(
+        "🗑 Напиши @username пользователя, у которого нужно сбросить скидку:",
+        reply_markup=back_keyboard()
+    )
+    await state.set_state(Form.reset_discount_username)
+
+@dp.message(Form.reset_discount_username)
+async def do_reset_discount(message: Message, state: FSMContext):
+    if (message.from_user.username or "") not in ADMINS:
+        return
+    username = message.text.strip().lstrip("@").lower()
+    conn = sqlite3.connect("dance.db")
+    c = conn.cursor()
+    c.execute("UPDATE users SET discount=0, discount_type='' WHERE LOWER(username)=?", (username,))
+    affected = c.rowcount
+    conn.commit(); conn.close()
+    await state.clear()
+    if affected:
+        await message.answer(f"✅ Скидка у @{username} сброшена", reply_markup=admin_keyboard())
+    else:
+        await message.answer(f"❌ Пользователь @{username} не найден", reply_markup=admin_keyboard())
 
 @dp.message(Command("addold"))
 async def add_old_students(message: Message):
