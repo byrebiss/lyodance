@@ -120,11 +120,12 @@ def get_user(user_id):
 def upsert_user(user_id, username, full_name, discount=0, discount_type="", ref_code=None, referred_by=None):
     conn = sqlite3.connect("dance.db")
     c = conn.cursor()
+    now = str(date.today())
     c.execute("""
-        INSERT INTO users (user_id, username, full_name, discount, discount_type, ref_code, referred_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO users (user_id, username, full_name, discount, discount_type, ref_code, referred_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, full_name=excluded.full_name
-    """, (user_id, username, full_name, discount, discount_type, ref_code, referred_by))
+    """, (user_id, username, full_name, discount, discount_type, ref_code, referred_by, now))
     conn.commit()
     conn.close()
 
@@ -239,14 +240,65 @@ def get_users_with_discount():
 def get_stats():
     conn = sqlite3.connect("dance.db")
     c = conn.cursor()
+    today = date.today()
+    week_ago = today - timedelta(days=7)
+
     c.execute("SELECT COUNT(*) FROM users")
     total = c.fetchone()[0]
+
     c.execute("SELECT COUNT(*) FROM users WHERE paid=1")
     paid = c.fetchone()[0]
+
     c.execute("SELECT SUM(final_amount) FROM pending_payments WHERE status='confirmed'")
     money = c.fetchone()[0] or 0
+
+    # Конверсия
+    conversion = round(paid / total * 100) if total else 0
+
+    # Ожидающие и отклонённые
+    c.execute("SELECT COUNT(*) FROM pending_payments WHERE status='pending'")
+    pending = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM pending_payments WHERE status='rejected'")
+    rejected = c.fetchone()[0]
+
+    # Новые за сегодня и за неделю — через rowid как приближение
+    c.execute("SELECT COUNT(*) FROM users WHERE rowid >= (SELECT MIN(rowid) FROM users WHERE user_id IN (SELECT user_id FROM users ORDER BY rowid DESC LIMIT (SELECT COUNT(*) FROM users)))")
+    # Используем pending_payments дату как прокси, просто считаем по id
+    c.execute("SELECT COUNT(*) FROM pending_payments WHERE id >= (SELECT COALESCE(MAX(id),0) - 100 FROM pending_payments)")
+
+    # Новые пользователи — приближение через отсутствие paid (свежие)
+    # Считаем через ref_used и общий count за период невозможно без created_at
+    # Добавим столбец если его нет
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN created_at TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass
+    c.execute("SELECT COUNT(*) FROM users WHERE DATE(created_at) = ?", (str(today),))
+    new_today = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users WHERE DATE(created_at) >= ?", (str(week_ago),))
+    new_week = c.fetchone()[0]
+
+    # Выручка по тарифам
+    c.execute("SELECT tariff, COUNT(*), SUM(final_amount) FROM pending_payments WHERE status='confirmed' GROUP BY tariff")
+    tariff_stats = c.fetchall()
+
+    # Распределение по группам
+    c.execute("SELECT group_id, COUNT(*) FROM users WHERE paid=1 GROUP BY group_id")
+    group_stats = c.fetchall()
+
+    # Скидки по типам
+    c.execute("SELECT discount_type, COUNT(*) FROM users WHERE discount_type != '' GROUP BY discount_type")
+    discount_stats = c.fetchall()
+
     conn.close()
-    return total, paid, money
+    return {
+        "total": total, "paid": paid, "money": money, "conversion": conversion,
+        "pending": pending, "rejected": rejected,
+        "new_today": new_today, "new_week": new_week,
+        "tariff_stats": tariff_stats, "group_stats": group_stats,
+        "discount_stats": discount_stats,
+    }
 
 # ── FSM ───────────────────────────────────────────────────────────────────────
 
@@ -615,14 +667,44 @@ async def admin_panel(callback: CallbackQuery):
 async def admin_stats(callback: CallbackQuery):
     if (callback.from_user.username or "") not in ADMINS:
         return
-    total, paid, money = get_stats()
-    await callback.message.edit_text(
+    s = get_stats()
+
+    # Выручка по тарифам
+    tariff_lines = []
+    for tariff, count, total_sum in s["tariff_stats"]:
+        name = PRICES.get(tariff, {}).get("name", tariff)
+        tariff_lines.append(f"  • {name}: {count} чел. — {(total_sum or 0):,} ₽")
+    tariff_text = "\n".join(tariff_lines) if tariff_lines else "  нет данных"
+
+    # Группы
+    group_lines = []
+    for gid, count in sorted(s["group_stats"]):
+        group_lines.append(f"  • Группа {gid}: {count} чел.")
+    group_text = "\n".join(group_lines) if group_lines else "  нет данных"
+
+    # Скидки
+    discount_map = {"old_student": "Старые ученики", "referral": "Рефералы", "repost": "Репосты"}
+    discount_lines = []
+    for dtype, count in s["discount_stats"]:
+        label = discount_map.get(dtype, dtype)
+        discount_lines.append(f"  • {label}: {count} чел.")
+    discount_text = "\n".join(discount_lines) if discount_lines else "  нет"
+
+    text = (
         f"📊 <b>Статистика</b>\n\n"
-        f"👥 Всего в боте: {total}\n"
-        f"✅ Оплатили: {paid}\n"
-        f"💰 Сумма оплат: {money:,} ₽",
-        reply_markup=admin_keyboard()
+        f"👥 Всего в боте: {s['total']}\n"
+        f"✅ Оплатили: {s['paid']}\n"
+        f"📈 Конверсия: {s['conversion']}%\n"
+        f"⏳ Ждут подтверждения: {s['pending']}\n"
+        f"❌ Отклонено платежей: {s['rejected']}\n\n"
+        f"💰 <b>Выручка: {s['money']:,} ₽</b>\n"
+        f"По тарифам:\n{tariff_text}\n\n"
+        f"👥 <b>По группам:</b>\n{group_text}\n\n"
+        f"🎁 <b>Скидки:</b>\n{discount_text}\n\n"
+        f"🆕 Новых сегодня: {s['new_today']}\n"
+        f"🆕 Новых за неделю: {s['new_week']}"
     )
+    await callback.message.edit_text(text, reply_markup=admin_keyboard())
 
 @dp.callback_query(F.data == "admin_users")
 async def admin_users(callback: CallbackQuery):
@@ -835,11 +917,76 @@ async def send_reminders():
             except Exception as ex:
                 logging.error(ex)
 
+
+# ── Напоминалка про незавершённую оплату ─────────────────────────────────────
+
+async def send_payment_reminders():
+    """Отправляет напоминание тем, кто дошёл до оплаты но не прислал скриншот (pending > 24ч)"""
+    conn = sqlite3.connect("dance.db")
+    c = conn.cursor()
+    # Берём юзеров у которых есть pending платёж (ещё не подтверждён и не отклонён)
+    c.execute("""
+        SELECT DISTINCT p.user_id FROM pending_payments p
+        WHERE p.status = 'pending'
+        AND p.user_id NOT IN (SELECT user_id FROM pending_payments WHERE status = 'confirmed')
+    """)
+    rows = c.fetchall()
+    conn.close()
+    for (user_id,) in rows:
+        try:
+            await bot.send_message(
+                user_id,
+                "💬 Привет! Возникли проблемы с оплатой?\n\n"
+                "Если что-то пошло не так — напиши @maxtroid, разберёмся 🙏\n\n"
+                "Или отправь скриншот перевода прямо сюда если уже оплатил 📸"
+            )
+        except Exception as ex:
+            logging.error(ex)
+
+# ── /deleteme — удаление из БД (только админы) ───────────────────────────────
+
+@dp.message(Command("deleteme"))
+async def delete_user_cmd(message: Message):
+    if (message.from_user.username or "") not in ADMINS:
+        return
+    parts = message.text.split()
+    # Если без аргумента — удаляем себя
+    if len(parts) == 1:
+        target_id = message.from_user.id
+        target_name = "себя"
+    else:
+        # /deleteme @username или /deleteme user_id
+        arg = parts[1].lstrip("@")
+        if arg.isdigit():
+            target_id = int(arg)
+            target_name = f"ID {target_id}"
+        else:
+            # Ищем по username
+            conn = sqlite3.connect("dance.db")
+            c = conn.cursor()
+            c.execute("SELECT user_id FROM users WHERE LOWER(username)=?", (arg.lower(),))
+            row = c.fetchone()
+            conn.close()
+            if not row:
+                await message.answer(f"❌ Пользователь @{arg} не найден в БД")
+                return
+            target_id = row[0]
+            target_name = f"@{arg}"
+
+    conn = sqlite3.connect("dance.db")
+    c = conn.cursor()
+    c.execute("DELETE FROM users WHERE user_id = ?", (target_id,))
+    c.execute("DELETE FROM pending_payments WHERE user_id = ?", (target_id,))
+    c.execute("DELETE FROM ref_used WHERE user_id = ?", (target_id,))
+    conn.commit(); conn.close()
+    await message.answer(f"🗑 {target_name} удалён из базы данных.")
+
 # ── Запуск ────────────────────────────────────────────────────────────────────
 
 async def main():
     init_db()
     scheduler.add_job(send_reminders, "cron", hour=12, minute=0)
+    scheduler.add_job(send_payment_reminders, "cron", hour=10, minute=0)
     scheduler.start()
     await dp.start_polling(bot)
 
