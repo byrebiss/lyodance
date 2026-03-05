@@ -106,10 +106,13 @@ def init_db():
             PRIMARY KEY (user_id, ref_code)
         )
     """)
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN created_at TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass  # столбец уже есть
     conn.commit()
     conn.close()
-
-def get_user(user_id):
     conn = sqlite3.connect("dance.db")
     c = conn.cursor()
     c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
@@ -261,19 +264,7 @@ def get_stats():
     c.execute("SELECT COUNT(*) FROM pending_payments WHERE status='rejected'")
     rejected = c.fetchone()[0]
 
-    # Новые за сегодня и за неделю — через rowid как приближение
-    c.execute("SELECT COUNT(*) FROM users WHERE rowid >= (SELECT MIN(rowid) FROM users WHERE user_id IN (SELECT user_id FROM users ORDER BY rowid DESC LIMIT (SELECT COUNT(*) FROM users)))")
-    # Используем pending_payments дату как прокси, просто считаем по id
-    c.execute("SELECT COUNT(*) FROM pending_payments WHERE id >= (SELECT COALESCE(MAX(id),0) - 100 FROM pending_payments)")
-
-    # Новые пользователи — приближение через отсутствие paid (свежие)
-    # Считаем через ref_used и общий count за период невозможно без created_at
-    # Добавим столбец если его нет
-    try:
-        c.execute("ALTER TABLE users ADD COLUMN created_at TEXT DEFAULT ''")
-        conn.commit()
-    except Exception:
-        pass
+    # Новые пользователи
     c.execute("SELECT COUNT(*) FROM users WHERE DATE(created_at) = ?", (str(today),))
     new_today = c.fetchone()[0]
     c.execute("SELECT COUNT(*) FROM users WHERE DATE(created_at) >= ?", (str(week_ago),))
