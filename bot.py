@@ -438,6 +438,22 @@ async def enroll(callback: CallbackQuery):
     discount = user[3] if user else 0
     await callback.message.edit_text("Выбери тариф 👇", reply_markup=tariff_keyboard(discount))
 
+def single_date_keyboard():
+    """Клавиатура с отдельными датами для разового занятия"""
+    buttons = []
+    for gid, events in SCHEDULE.items():
+        for e in events:
+            if e["type"] != "dance":
+                continue
+            label = f"💃 {e['date'].strftime('%-d %B')} (Группа {gid}), {e['time']}"
+            buttons.append([InlineKeyboardButton(
+                text=label,
+                callback_data=f"single_{gid}_{e['date'].strftime('%Y%m%d')}"
+            )])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="enroll")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 @dp.callback_query(F.data.startswith("tariff_"))
 async def choose_tariff(callback: CallbackQuery, state: FSMContext):
     key    = callback.data.replace("tariff_", "")
@@ -449,10 +465,44 @@ async def choose_tariff(callback: CallbackQuery, state: FSMContext):
     await state.update_data(tariff_key=key, tariff_name=tariff["name"],
                              original=tariff["price"], discount=discount, final=final)
     await state.set_state(Form.choosing_group)
+
+    if key == "single":
+        await callback.message.edit_text(
+            f"Ты выбрала <b>{tariff['name']}</b>\n\nВыбери дату занятия 👇",
+            reply_markup=single_date_keyboard()
+        )
+    else:
+        await callback.message.edit_text(
+            f"Ты выбрала <b>{tariff['name']}</b>\n\nТеперь выбери группу 👇",
+            reply_markup=group_keyboard(key)
+        )
+
+@dp.callback_query(Form.choosing_group, F.data.startswith("single_"))
+async def choose_single_date(callback: CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")  # single_GID_YYYYMMDD
+    gid = int(parts[1])
+    date_str = parts[2]
+    chosen_date = date(int(date_str[:4]), int(date_str[4:6]), int(date_str[6:]))
+    data = await state.get_data()
+    await state.update_data(group_id=gid)
+
+    # Найдём время этого занятия
+    event_time = ""
+    for e in SCHEDULE.get(gid, []):
+        if e["date"] == chosen_date and e["type"] == "dance":
+            event_time = e["time"]
+            break
+
+    date_label = chosen_date.strftime("%-d %B %Y")
     await callback.message.edit_text(
-        f"Ты выбрала <b>{tariff['name']}</b>\n\nТеперь выбери группу 👇",
-        reply_markup=group_keyboard(key)
+        f"Отлично! Твоё занятие:\n\n"
+        f"💃 {date_label}, {event_time}\n\n"
+        f"💰 К оплате: <b>{data['final']:,} ₽</b>" + (f" (скидка {data['discount']}%)" if data['discount'] else "") +
+        f"\n\n📱 Переведи на номер:\n<code>{PAYMENT_PHONE}</code>\n({PAYMENT_NAME})\n\n"
+        f"После оплаты отправь сюда <b>скриншот перевода</b> 📸",
+        reply_markup=back_keyboard()
     )
+    await state.set_state(Form.waiting_screenshot)
 
 @dp.callback_query(Form.choosing_group, F.data.startswith("group_"))
 async def choose_group(callback: CallbackQuery, state: FSMContext):
