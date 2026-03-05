@@ -113,6 +113,8 @@ def init_db():
         pass  # столбец уже есть
     conn.commit()
     conn.close()
+
+def get_user(user_id):
     conn = sqlite3.connect("dance.db")
     c = conn.cursor()
     c.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
