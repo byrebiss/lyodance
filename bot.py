@@ -387,6 +387,7 @@ async def add_old_students(message: Message):
     c    = conn.cursor()
     for u in usernames:
         c.execute("INSERT OR IGNORE INTO old_students (username) VALUES (?)", (u,))
+        c.execute("UPDATE users SET discount=13, discount_type='old_student' WHERE LOWER(username)=?", (u,))
     conn.commit(); conn.close()
     await message.answer(f"✅ Добавлено {len(usernames)} учеников из старого потока")
 
