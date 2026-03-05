@@ -58,6 +58,22 @@ FULL_PACKAGE_GROUPS = {1, 2}
 EVENT_EMOJI = {"dance": "💃", "meeting": "🤝", "shoot": "📸"}
 EVENT_NAME  = {"dance": "Танцы", "meeting": "Встреча", "shoot": "Съёмка"}
 
+RU_MONTHS = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря"
+}
+RU_MONTHS_SHORT = {
+    1: "янв", 2: "фев", 3: "мар", 4: "апр",
+    5: "май", 6: "июн", 7: "июл", 8: "авг",
+    9: "сен", 10: "окт", 11: "ноя", 12: "дек"
+}
+
+def fmt_date(d, short=False):
+    """Форматирует дату на русском: '31 марта' или '31 мар'"""
+    months = RU_MONTHS_SHORT if short else RU_MONTHS
+    return f"{d.day} {months[d.month]}"
+
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=MemoryStorage())
@@ -333,8 +349,8 @@ def group_keyboard(tariff_key):
         if tariff_key == "full" and gid not in FULL_PACKAGE_GROUPS:
             continue
         dance_dates = [e for e in events if e["type"] == "dance"]
-        first = dance_dates[0]["date"].strftime("%-d %b")
-        last  = dance_dates[-1]["date"].strftime("%-d %b")
+        first = fmt_date(dance_dates[0]["date"], short=True)
+        last  = fmt_date(dance_dates[-1]["date"], short=True)
         extra = ""
         if tariff_key == "full" and any(e["type"] != "dance" for e in events):
             extra = " + встреча + съёмка"
@@ -375,7 +391,7 @@ def format_schedule(group_id, tariff):
             continue
         emoji = EVENT_EMOJI[e["type"]]
         name  = EVENT_NAME[e["type"]]
-        d     = e["date"].strftime("%-d %B")
+        d     = fmt_date(e["date"])
         time  = e["time"]
         line  = f"{emoji} {d} — {name}, {time}"
         if e["date"] < today:
@@ -445,7 +461,7 @@ def single_date_keyboard():
         for e in events:
             if e["type"] != "dance":
                 continue
-            label = f"💃 {e['date'].strftime('%-d %B')} (Группа {gid}), {e['time']}"
+            label = f"💃 {fmt_date(e['date'])} (Группа {gid}), {e['time']}"
             buttons.append([InlineKeyboardButton(
                 text=label,
                 callback_data=f"single_{gid}_{e['date'].strftime('%Y%m%d')}"
@@ -493,7 +509,7 @@ async def choose_single_date(callback: CallbackQuery, state: FSMContext):
             event_time = e["time"]
             break
 
-    date_label = chosen_date.strftime("%-d %B %Y")
+    date_label = f"{fmt_date(chosen_date)} {chosen_date.year}"
     await callback.message.edit_text(
         f"Отлично! Твоё занятие:\n\n"
         f"💃 {date_label}, {event_time}\n\n"
