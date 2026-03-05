@@ -414,7 +414,6 @@ async def cmd_start(message: Message, state: FSMContext):
     elif discount_type == "referral":
         discount_text = "\n\n🎁 <b>Тебя пригласили — скидка 5% уже применена!</b>"
 
-    await message.answer("👇", reply_markup=menu_reply_keyboard())
     await message.answer(
         f"Привет, {full_name}! 👋\n\n"
         f"Добро пожаловать в <b>курс танцев с Лё</b> 💃\n\n"
@@ -422,6 +421,7 @@ async def cmd_start(message: Message, state: FSMContext):
         f"{discount_text}",
         reply_markup=main_menu_keyboard(is_admin)
     )
+    await message.answer("✨", reply_markup=menu_reply_keyboard())
 
 # ── Записаться ────────────────────────────────────────────────────────────────
 
