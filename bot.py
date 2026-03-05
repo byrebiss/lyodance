@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime, date, timedelta
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -29,28 +29,31 @@ PRICES = {
 # Расписание групп
 SCHEDULE = {
     1: [
-        {"date": date(2025, 3, 31), "type": "dance",   "time": "20:00-22:00"},
-        {"date": date(2025, 4, 2),  "type": "dance",   "time": "20:00-22:00"},
-        {"date": date(2025, 4, 4),  "type": "meeting", "time": "20:00-21:00"},
-        {"date": date(2025, 4, 7),  "type": "dance",   "time": "20:00-22:00"},
-        {"date": date(2025, 4, 9),  "type": "dance",   "time": "20:00-22:00"},
-        {"date": date(2025, 4, 11), "type": "shoot",   "time": "19:00-21:00"},
+        {"date": date(2026, 3, 31), "type": "dance",   "time": "20:00-22:00"},
+        {"date": date(2026, 4, 2),  "type": "dance",   "time": "20:00-22:00"},
+        {"date": date(2026, 4, 4),  "type": "meeting", "time": "20:00-21:00"},
+        {"date": date(2026, 4, 7),  "type": "dance",   "time": "20:00-22:00"},
+        {"date": date(2026, 4, 9),  "type": "dance",   "time": "20:00-22:00"},
+        {"date": date(2026, 4, 11), "type": "shoot",   "time": "19:00-21:00"},
     ],
     2: [
-        {"date": date(2025, 4, 14), "type": "dance",   "time": "20:00-22:00"},
-        {"date": date(2025, 4, 16), "type": "dance",   "time": "20:00-22:00"},
-        {"date": date(2025, 4, 18), "type": "meeting", "time": "20:00-21:00"},
-        {"date": date(2025, 4, 21), "type": "dance",   "time": "20:00-22:00"},
-        {"date": date(2025, 4, 23), "type": "dance",   "time": "20:00-22:00"},
-        {"date": date(2025, 4, 25), "type": "shoot",   "time": "19:00-21:00"},
+        {"date": date(2026, 4, 14), "type": "dance",   "time": "20:00-22:00"},
+        {"date": date(2026, 4, 16), "type": "dance",   "time": "20:00-22:00"},
+        {"date": date(2026, 4, 18), "type": "meeting", "time": "20:00-21:00"},
+        {"date": date(2026, 4, 21), "type": "dance",   "time": "20:00-22:00"},
+        {"date": date(2026, 4, 23), "type": "dance",   "time": "20:00-22:00"},
+        {"date": date(2026, 4, 25), "type": "shoot",   "time": "19:00-21:00"},
     ],
     3: [
-        {"date": date(2025, 4, 28), "type": "dance", "time": "20:00-22:00"},
-        {"date": date(2025, 4, 30), "type": "dance", "time": "20:00-22:00"},
-        {"date": date(2025, 5, 5),  "type": "dance", "time": "20:00-22:00"},
-        {"date": date(2025, 5, 7),  "type": "dance", "time": "20:00-22:00"},
+        {"date": date(2026, 4, 28), "type": "dance", "time": "20:00-22:00"},
+        {"date": date(2026, 4, 30), "type": "dance", "time": "20:00-22:00"},
+        {"date": date(2026, 5, 5),  "type": "dance", "time": "20:00-22:00"},
+        {"date": date(2026, 5, 7),  "type": "dance", "time": "20:00-22:00"},
     ],
 }
+
+# Группы доступные для полного пакета
+FULL_PACKAGE_GROUPS = {1, 2}
 
 EVENT_EMOJI = {"dance": "💃", "meeting": "🤝", "shoot": "📸"}
 EVENT_NAME  = {"dance": "Танцы", "meeting": "Встреча", "shoot": "Съёмка"}
@@ -225,6 +228,14 @@ def get_all_users():
     conn.close()
     return [r[0] for r in rows]
 
+def get_users_with_discount():
+    conn = sqlite3.connect("dance.db")
+    c = conn.cursor()
+    c.execute("SELECT user_id, username, full_name, discount, discount_type FROM users WHERE discount > 0")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 def get_stats():
     conn = sqlite3.connect("dance.db")
     c = conn.cursor()
@@ -246,6 +257,7 @@ class Form(StatesGroup):
     broadcast_text            = State()
     broadcast_group_text      = State()
     reset_discount_username   = State()
+    addold_collecting         = State()
 
 # ── Клавиатуры ────────────────────────────────────────────────────────────────
 
@@ -273,6 +285,8 @@ def tariff_keyboard(discount):
 def group_keyboard(tariff_key):
     buttons = []
     for gid, events in SCHEDULE.items():
+        if tariff_key == "full" and gid not in FULL_PACKAGE_GROUPS:
+            continue
         dance_dates = [e for e in events if e["type"] == "dance"]
         first = dance_dates[0]["date"].strftime("%-d %b")
         last  = dance_dates[-1]["date"].strftime("%-d %b")
@@ -299,6 +313,13 @@ def back_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ Назад", callback_data="back_menu")]
     ])
+
+def menu_reply_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📋 Меню")]],
+        resize_keyboard=True,
+        persistent=True
+    )
 
 def format_schedule(group_id, tariff):
     events = SCHEDULE.get(group_id, [])
@@ -348,6 +369,7 @@ async def cmd_start(message: Message, state: FSMContext):
     elif discount_type == "referral":
         discount_text = "\n\n🎁 <b>Тебя пригласили — скидка 5% уже применена!</b>"
 
+    await message.answer("👇", reply_markup=menu_reply_keyboard())
     await message.answer(
         f"Привет, {full_name}! 👋\n\n"
         f"Добро пожаловать в <b>курс танцев с Лё</b> 💃\n\n"
@@ -357,6 +379,13 @@ async def cmd_start(message: Message, state: FSMContext):
     )
 
 # ── Записаться ────────────────────────────────────────────────────────────────
+
+@dp.message(F.text == "📋 Меню")
+async def menu_button(message: Message, state: FSMContext):
+    await state.clear()
+    username = message.from_user.username or ""
+    is_admin = username in ADMINS
+    await message.answer("Главное меню 👇", reply_markup=main_menu_keyboard(is_admin))
 
 @dp.callback_query(F.data == "enroll")
 async def enroll(callback: CallbackQuery):
@@ -670,72 +699,108 @@ async def do_broadcast_group(message: Message, state: FSMContext):
     await state.clear()
 
 @dp.callback_query(F.data == "admin_addold")
-async def admin_addold_prompt(callback: CallbackQuery):
+async def admin_addold_prompt(callback: CallbackQuery, state: FSMContext):
     if (callback.from_user.username or "") not in ADMINS:
         return
+    await state.set_state(Form.addold_collecting)
+    await state.update_data(addold_list=[])
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Готово", callback_data="addold_done")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")],
+    ])
     await callback.message.edit_text(
-        "Напиши список username через /addold:\n\n<code>/addold\n@username1\n@username2</code>",
-        reply_markup=back_keyboard()
+        "➕ <b>Добавление старых учеников</b>\n\n"
+        "Отправляй username'ы по одному или списком (каждый с новой строки).\n"
+        "Можно с @ или без.\n\n"
+        "Когда закончишь — нажми <b>✅ Готово</b>.",
+        reply_markup=kb
     )
 
-@dp.callback_query(F.data == "admin_resetdiscount")
-async def admin_resetdiscount_prompt(callback: CallbackQuery, state: FSMContext):
-    if (callback.from_user.username or "") not in ADMINS:
-        return
-    await callback.message.edit_text(
-        "🗑 Напиши @username пользователя, у которого нужно сбросить скидку:",
-        reply_markup=back_keyboard()
-    )
-    await state.set_state(Form.reset_discount_username)
-
-@dp.message(Form.reset_discount_username)
-async def do_reset_discount(message: Message, state: FSMContext):
+@dp.message(Form.addold_collecting)
+async def addold_receive(message: Message, state: FSMContext):
     if (message.from_user.username or "") not in ADMINS:
         return
-    username = message.text.strip().lstrip("@").lower()
+    data = await state.get_data()
+    current = data.get("addold_list", [])
+    new_names = [l.strip().lstrip("@").lower() for l in message.text.split("\n") if l.strip()]
+    current.extend(new_names)
+    await state.update_data(addold_list=current)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Готово", callback_data="addold_done")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")],
+    ])
+    await message.answer(
+        f"✅ Добавлено в список: {', '.join('@' + u for u in new_names)}\n"
+        f"Всего в очереди: {len(current)} чел.\n\n"
+        f"Продолжай отправлять или нажми <b>✅ Готово</b>.",
+        reply_markup=kb
+    )
+
+@dp.callback_query(F.data == "addold_done")
+async def addold_done(callback: CallbackQuery, state: FSMContext):
+    if (callback.from_user.username or "") not in ADMINS:
+        return
+    data = await state.get_data()
+    usernames = data.get("addold_list", [])
+    await state.clear()
+    if not usernames:
+        await callback.message.edit_text("Список пустой, никого не добавлено.", reply_markup=admin_keyboard())
+        return
     conn = sqlite3.connect("dance.db")
     c = conn.cursor()
-    c.execute("UPDATE users SET discount=0, discount_type='' WHERE LOWER(username)=?", (username,))
-    affected = c.rowcount
-    conn.commit(); conn.close()
-    await state.clear()
-    if affected:
-        await message.answer(f"✅ Скидка у @{username} сброшена", reply_markup=admin_keyboard())
-    else:
-        await message.answer(f"❌ Пользователь @{username} не найден", reply_markup=admin_keyboard())
-
-@dp.message(Command("addold"))
-async def add_old_students(message: Message):
-    if (message.from_user.username or "") not in ADMINS:
-        return
-    lines     = message.text.replace("/addold", "").strip().split("\n")
-    usernames = [l.strip().lstrip("@").lower() for l in lines if l.strip()]
-    conn = sqlite3.connect("dance.db")
-    c    = conn.cursor()
     for u in usernames:
         c.execute("INSERT OR IGNORE INTO old_students (username) VALUES (?)", (u,))
         c.execute("UPDATE users SET discount=13, discount_type='old_student' WHERE LOWER(username)=?", (u,))
     conn.commit(); conn.close()
-    await message.answer(f"✅ Добавлено {len(usernames)} учеников из старого потока")
+    await callback.message.edit_text(
+        f"✅ Добавлено {len(usernames)} старых учеников:\n" + "\n".join(f"@{u}" for u in usernames),
+        reply_markup=admin_keyboard()
+    )
 
-@dp.message(Command("resetdiscount"))
-async def reset_discount(message: Message):
-    if (message.from_user.username or "") not in ADMINS:
+@dp.callback_query(F.data == "admin_resetdiscount")
+async def admin_resetdiscount_list(callback: CallbackQuery, state: FSMContext):
+    if (callback.from_user.username or "") not in ADMINS:
         return
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer("Использование: /resetdiscount @username")
+    await state.clear()
+    users = get_users_with_discount()
+    if not users:
+        await callback.message.edit_text("Нет пользователей со скидкой.", reply_markup=admin_keyboard())
         return
-    username = parts[1].lstrip("@").lower()
+    buttons = []
+    for uid, uname, fname, disc, dtype in users:
+        label = f"{fname or uname or uid} — {disc}% ({dtype})"
+        buttons.append([InlineKeyboardButton(text=f"❌ {label}", callback_data=f"do_reset_{uid}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")])
+    await callback.message.edit_text(
+        "🗑 <b>Сбросить скидку</b>\n\nНажми ❌ рядом с нужным человеком:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+@dp.callback_query(F.data.startswith("do_reset_"))
+async def do_reset_discount_btn(callback: CallbackQuery):
+    if (callback.from_user.username or "") not in ADMINS:
+        return
+    uid = int(callback.data.replace("do_reset_", ""))
     conn = sqlite3.connect("dance.db")
     c = conn.cursor()
-    c.execute("UPDATE users SET discount=0, discount_type='' WHERE LOWER(username)=?", (username,))
-    affected = c.rowcount
+    c.execute("UPDATE users SET discount=0, discount_type='' WHERE user_id=?", (uid,))
     conn.commit(); conn.close()
-    if affected:
-        await message.answer(f"✅ Скидка у @{username} сброшена")
-    else:
-        await message.answer(f"❌ Пользователь @{username} не найден")
+    # Обновляем список
+    users = get_users_with_discount()
+    if not users:
+        await callback.message.edit_text("✅ Скидка сброшена. Больше нет пользователей со скидкой.", reply_markup=admin_keyboard())
+        return
+    buttons = []
+    for u_id, uname, fname, disc, dtype in users:
+        label = f"{fname or uname or u_id} — {disc}% ({dtype})"
+        buttons.append([InlineKeyboardButton(text=f"❌ {label}", callback_data=f"do_reset_{u_id}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="admin_panel")])
+    await callback.answer("✅ Скидка сброшена")
+    await callback.message.edit_text(
+        "🗑 <b>Сбросить скидку</b>\n\nНажми ❌ рядом с нужным человеком:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
 
 # ── Напоминания ───────────────────────────────────────────────────────────────
 
